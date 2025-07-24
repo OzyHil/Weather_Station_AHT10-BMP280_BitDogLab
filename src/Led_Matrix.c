@@ -14,7 +14,7 @@ void configure_led_matrix()
 
     pio_matrix_program_init(pio.ref, pio.state_machine, pio.offset, LED_MATRIX); // Inicializa o programa
 
-    update_matrix_from_level(0, 0);
+    update_matrix_from_level(0, 0, DARK);
 }
 
 // Converte uma estrutura de cor RGB para um valor 32 bits conforme o protocolo da matriz
@@ -23,7 +23,7 @@ uint32_t rgb_matrix(led_color color)
     return (color.green << 24) | (color.red << 16) | (color.blue << 8);
 }
 
-void update_matrix_from_level(uint current_level, uint max_level)
+void update_matrix_from_level(uint current_level, uint max_level, led_color color_m)
 {
     // Limpa a matriz (todos os LEDs apagados)
     for (int i = 0; i < NUM_PIXELS; i++)
@@ -62,7 +62,7 @@ void update_matrix_from_level(uint current_level, uint max_level)
     for (int i = 0; i < NUM_PIXELS; i++)
     {
         uint32_t color = (matrix[i] == 1)
-                             ? rgb_matrix(BLUE)
+                             ? rgb_matrix(color_m)
                              : rgb_matrix(DARK);
 
         pio_sm_put_blocking(pio.ref, pio.state_machine, color);

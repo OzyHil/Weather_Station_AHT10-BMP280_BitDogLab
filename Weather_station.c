@@ -113,10 +113,13 @@ void vTaskResetThresholds()
 void vTaskLedMatrix()
 {
     display_mode_t current_display_mode = DISPLAY_TEMP; // Modo de exibição atual
+    int32_t temperature;
+    int32_t pressure;
+    int32_t humidity;
 
     while (1)
     {
-        if (xSemaphoreTake(xDisplayMode, portMAX_DELAY))
+        if (xSemaphoreTake(xDisplayMode, 0) == pdTRUE) // Espera pelo sinal do botão A
         {
             if (current_display_mode == DISPLAY_TEMP) // Verifica o modo de exibição atual
             {
@@ -130,24 +133,27 @@ void vTaskLedMatrix()
             {
                 current_display_mode = DISPLAY_TEMP; // Volta para o modo de exibição inicial
             }
-            xSemaphoreGive(xDisplayMode); // Libera o mutex do display
         }
 
         if (xSemaphoreTake(xReadingsMutex, portMAX_DELAY) == pdTRUE)
         {
-            if (current_display_mode == DISPLAY_TEMP) // Verifica o modo de exibição atual
-            {
-                update_matrix_from_level(g_temperature, MAX_TEMP_LEVEL); // Atualiza a matriz de LEDs com o nível de temperatura
-            }
-            else if (current_display_mode == DISPLAY_HUM)
-            {
-                update_matrix_from_level(g_humidity, MAX_HUM_LEVEL); // Atualiza a matriz de LEDs com o nível de umidade
-            }
-            else if (current_display_mode == DISPLAY_PRESS)
-            {
-                update_matrix_from_level(g_pressure, MAX_PRESS_LEVEL); // Atualiza a matriz de LEDs com o nível de pressão
-            }
+            temperature = g_temperature;
+            pressure = g_pressure;
+            humidity = g_humidity;
             xSemaphoreGive(xReadingsMutex); // Libera o mutex da matriz de LEDs
+        }
+
+        if (current_display_mode == DISPLAY_TEMP) // Verifica o modo de exibição atual
+        {
+            update_matrix_from_level(temperature, MAX_TEMP_LEVEL, RED); // Atualiza a matriz de LEDs com o nível de temperatura
+        }
+        else if (current_display_mode == DISPLAY_HUM)
+        {
+            update_matrix_from_level(humidity, MAX_HUM_LEVEL, ORANGE); // Atualiza a matriz de LEDs com o nível de umidade
+        }
+        else if (current_display_mode == DISPLAY_PRESS)
+        {
+            update_matrix_from_level(pressure, MAX_PRESS_LEVEL, BLUE); // Atualiza a matriz de LEDs com o nível de pressão
         }
         vTaskDelay(pdMS_TO_TICKS(225)); // Aguarda 225 ms antes de repetir
     }
@@ -202,11 +208,14 @@ void vTaskControlSystem()
 
         if (xSemaphoreTake(xReadingsMutex, portMAX_DELAY) == pdTRUE)
         {
-            g_temperature = new_temperature < MIN_TEMP_LEVEL ? MIN_TEMP_LEVEL : new_temperature > MAX_TEMP_LEVEL ? MAX_TEMP_LEVEL: new_temperature;
+            g_temperature = new_temperature < MIN_TEMP_LEVEL ? MIN_TEMP_LEVEL : new_temperature > MAX_TEMP_LEVEL ? MAX_TEMP_LEVEL
+                                                                                                                 : new_temperature;
 
-            g_pressure = new_pressure < MIN_PRESS_LEVEL ? MIN_PRESS_LEVEL : new_pressure > MAX_PRESS_LEVEL ? MAX_PRESS_LEVEL: new_pressure;
+            g_pressure = new_pressure < MIN_PRESS_LEVEL ? MIN_PRESS_LEVEL : new_pressure > MAX_PRESS_LEVEL ? MAX_PRESS_LEVEL
+                                                                                                           : new_pressure;
 
-            g_humidity = new_humidity < MIN_HUM_LEVEL ? MIN_HUM_LEVEL : new_humidity > MAX_HUM_LEVEL ? MAX_HUM_LEVEL : new_humidity;
+            g_humidity = new_humidity < MIN_HUM_LEVEL ? MIN_HUM_LEVEL : new_humidity > MAX_HUM_LEVEL ? MAX_HUM_LEVEL
+                                                                                                     : new_humidity;
 
             add_reading(g_temperature, g_temperature_historic_levels);
             add_reading(g_pressure, g_pressure_historic_levels);
