@@ -30,20 +30,24 @@
 #include "semphr.h"
 
 // Definição de constantes e macros
-#define MIN_TEMP_LEVEL 24     // Nível mínimo de água em mililitros (experimental - ajuste de acordo com a necessidade)
-#define MAX_TEMP_LEVEL 26    
+#define MIN_TEMP_LEVEL -40    
+#define MAX_TEMP_LEVEL 85    
 
-#define MIN_HUM_LEVEL 70    
-#define MAX_HUM_LEVEL 90
+#define MIN_HUM_LEVEL 0    
+#define MAX_HUM_LEVEL 100
 
-#define MIN_PRESS_LEVEL 50  
-#define MAX_PRESS_LEVEL 300   
+#define MIN_PRESS_LEVEL 300  
+#define MAX_PRESS_LEVEL 1100   
 
 #define MAX_READINGS 10 // Pino da bomba de água
 
 extern int32_t g_temperature;
 extern int32_t g_pressure;
 extern int32_t g_humidity;
+
+extern int32_t g_offset_humidity;
+extern int32_t g_offset_temperature;
+extern int32_t g_offset_pressure;
 
 extern int32_t g_temperature_max_limit;
 extern int32_t g_pressure_max_limit;
@@ -57,7 +61,7 @@ extern int32_t g_temperature_historic_levels[MAX_READINGS];
 extern int32_t g_pressure_historic_levels[MAX_READINGS];
 extern int32_t g_humidity_historic_levels[MAX_READINGS]; 
 
-extern SemaphoreHandle_t xLevelsLimitsMutex, xReadingsMutex;
+extern SemaphoreHandle_t xLevelsLimitsMutex, xReadingsMutex, xOffsetMutex;
 
 #define I2C_PORT_0 i2c0               // i2c0 pinos 0 e 1, i2c1 pinos 2 e 3
 #define I2C_SDA_0 0                   // 0 ou 2

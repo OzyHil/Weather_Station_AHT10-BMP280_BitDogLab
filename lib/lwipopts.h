@@ -17,8 +17,11 @@
 #else
 // MEM_LIBC_MALLOC is incompatible with non polling versions
 #define MEM_LIBC_MALLOC             0
-#define MEM_MEM_MALLOC             0
 #endif
+
+#define REQUEST_BUFFER_SIZE          2048
+#define MEM_LIBC_MALLOC             0
+#define MEM_MEM_MALLOC             0
 #define MEM_ALIGNMENT               4
 #define MEM_SIZE                    (32 * 1024)
 #define MEMP_NUM_TCP_SEG            32

@@ -88,18 +88,21 @@ void user_request(char **request_ptr, struct tcp_pcb *tpcb)
     int32_t humidity;
     int32_t humidity_min_limit;
     int32_t humidity_max_limit;
+    int32_t humidity_offset;
 
     int32_t temperature;
     int32_t temperature_min_limit;
     int32_t temperature_max_limit;
+    int32_t temperature_offset;
 
     int32_t pressure;
     int32_t pressure_min_limit;
     int32_t pressure_max_limit;
+    int32_t pressure_offset;
 
-    uint32_t humidity_historic_levels[MAX_READINGS];
-    uint32_t temperature_historic_levels[MAX_READINGS];
-    uint32_t pressure_historic_levels[MAX_READINGS];
+    int32_t humidity_historic_levels[MAX_READINGS];
+    int32_t temperature_historic_levels[MAX_READINGS];
+    int32_t pressure_historic_levels[MAX_READINGS];
 
     if (strstr(request, "GET /data"))
     {
@@ -112,9 +115,9 @@ void user_request(char **request_ptr, struct tcp_pcb *tpcb)
             temperature = g_temperature;
             pressure = g_pressure;
 
-            memcpy(humidity_historic_levels, g_humidity_historic_levels, sizeof(uint) * MAX_READINGS);
-            memcpy(temperature_historic_levels, g_temperature_historic_levels, sizeof(uint) * MAX_READINGS);
-            memcpy(pressure_historic_levels, g_pressure_historic_levels, sizeof(uint) * MAX_READINGS);
+            memcpy(humidity_historic_levels, g_humidity_historic_levels, sizeof(int32_t) * MAX_READINGS);
+            memcpy(temperature_historic_levels, g_temperature_historic_levels, sizeof(int32_t) * MAX_READINGS);
+            memcpy(pressure_historic_levels, g_pressure_historic_levels, sizeof(int32_t) * MAX_READINGS);
             xSemaphoreGive(xReadingsMutex);
         }
 
@@ -132,19 +135,27 @@ void user_request(char **request_ptr, struct tcp_pcb *tpcb)
             xSemaphoreGive(xLevelsLimitsMutex);
         }
 
-        char json_h_temp[1024];
+        if (xSemaphoreTake(xOffsetMutex, portMAX_DELAY) == pdTRUE)
+        {
+            pressure_offset = g_offset_pressure;
+            humidity_offset = g_offset_humidity;
+            temperature_offset = g_offset_temperature;
+            xSemaphoreGive(xOffsetMutex);
+        }
+
+        char json_h_temp[256];
         char *ptr_h_temp = json_h_temp;
 
-        char json_h_hum[1024];
+        char json_h_hum[256];
         char *ptr_h_hum = json_h_hum;
 
-        char json_h_press[1024];
+        char json_h_press[256];
         char *ptr_h_press = json_h_press;
 
         *ptr_h_temp++ = '[';
         for (int i = 0; i < MAX_READINGS; i++)
         {
-            ptr_h_temp += sprintf(ptr_h_temp, "%u%s", temperature_historic_levels[i], (i < MAX_READINGS - 1) ? "," : "");
+            ptr_h_temp += sprintf(ptr_h_temp, "%d%s", temperature_historic_levels[i], (i < MAX_READINGS - 1) ? "," : "");
         }
         *ptr_h_temp++ = ']';
         *ptr_h_temp = '\0';
@@ -152,7 +163,7 @@ void user_request(char **request_ptr, struct tcp_pcb *tpcb)
         *ptr_h_hum++ = '[';
         for (int i = 0; i < MAX_READINGS; i++)
         {
-            ptr_h_hum += sprintf(ptr_h_hum, "%u%s", humidity_historic_levels[i], (i < MAX_READINGS - 1) ? "," : "");
+            ptr_h_hum += sprintf(ptr_h_hum, "%d%s", humidity_historic_levels[i], (i < MAX_READINGS - 1) ? "," : "");
         }
         *ptr_h_hum++ = ']';
         *ptr_h_hum = '\0';
@@ -160,13 +171,16 @@ void user_request(char **request_ptr, struct tcp_pcb *tpcb)
         *ptr_h_press++ = '[';
         for (int i = 0; i < MAX_READINGS; i++)
         {
-            ptr_h_press += sprintf(ptr_h_press, "%u%s", pressure_historic_levels[i], (i < MAX_READINGS - 1) ? "," : "");
+            ptr_h_press += sprintf(ptr_h_press, "%d%s", pressure_historic_levels[i], (i < MAX_READINGS - 1) ? "," : "");
         }
         *ptr_h_press++ = ']';
         *ptr_h_press = '\0';
 
         snprintf(json, sizeof(json),
-                 "{\"temp_atual\":%d,\"hum_atual\":%d,\"press_atual\":%d,\"min_config_temp\":%d,\"max_config_temp\":%d,\"min_config_hum\":%d,\"max_config_hum\":%d,\"min_config_press\":%d,\"max_config_press\":%d,\"historico_temp\":%s,\"historico_hum\":%s,\"historico_press\":%s}",
+                 "{\"temp_offset\":%d,\"pres_offset\":%d,\"humi_offset\":%d,\"temp_atual\":%d,\"hum_atual\":%d,\"press_atual\":%d,\"min_config_temp\":%d,\"max_config_temp\":%d,\"min_config_hum\":%d,\"max_config_hum\":%d,\"min_config_press\":%d,\"max_config_press\":%d,\"historico_temp\":%s,\"historico_hum\":%s,\"historico_press\":%s}",
+                 temperature_offset,
+                 pressure_offset,
+                 humidity_offset,
                  temperature,
                  humidity,
                  pressure,
@@ -181,7 +195,7 @@ void user_request(char **request_ptr, struct tcp_pcb *tpcb)
                  json_h_press);
 
         // Monta resposta HTTP
-        char response[512];
+        char response[1024];
         snprintf(response, sizeof(response),
                  "HTTP/1.1 200 OK\r\n"
                  "Content-Type: application/json\r\n"
@@ -200,32 +214,89 @@ void user_request(char **request_ptr, struct tcp_pcb *tpcb)
         {
             body += 4; // pular os headers
 
-            // Exemplo de corpo esperado: {"temperatura": 30, min":30,"max":80}
-            int min = -1, max = -1;
+            // Variáveis para armazenar os valores recebidos
+            char sensor[32] = {0};
+            int min = 0, max = 0;
+            int offset = 0;
 
-            // Encontrar os números manualmente
-            char *min_str = strstr(body, "\"min\"");
-            char *max_str = strstr(body, "\"max\"");
+            // Parse manual (simples)
+            char *min_ptr = strstr(body, "min_value=");
+            char *max_ptr = strstr(body, "max_value=");
+            char *offset_ptr = strstr(body, "offset_value=");
+            char *sensor_ptr = strstr(body, "sensor=");
 
-            if (min_str)
-                min = atoi(min_str + 6); // pula '"min":'
-            if (max_str)
-                max = atoi(max_str + 6); // pula '"max":'
+            if (sensor_ptr)
+                sscanf(sensor_ptr, "sensor=%31[^&]", sensor);
 
-            if (min >= 0 && max >= 0 && min < max && max <= 100)
+            if (min_ptr)
+                sscanf(min_ptr, "min_value=%d", &min);
+
+            if (max_ptr)
+                sscanf(max_ptr, "max_value=%d", &max);
+
+            if (offset_ptr)
+                sscanf(offset_ptr, "offset_value=%d", &offset);
+
+            if (strcmp(sensor, "temperature") == 0)
             {
-                if (xSemaphoreTake(xLevelsLimitsMutex, portMAX_DELAY) == pdTRUE)
+                if (min >= MIN_TEMP_LEVEL && max <= MAX_TEMP_LEVEL && min < max)
                 {
-                    g_humidity_min_limit = min;
-                    g_humidity_max_limit = max;
-                    xSemaphoreGive(xLevelsLimitsMutex);
-                }
+                    if (xSemaphoreTake(xLevelsLimitsMutex, portMAX_DELAY) == pdTRUE)
+                    {
+                        g_temperature_min_limit = min;
+                        g_temperature_max_limit = max;
+                        xSemaphoreGive(xLevelsLimitsMutex);
 
-                tcp_write(tpcb, "HTTP/1.1 200 OK\r\n\r\n", 19, TCP_WRITE_FLAG_COPY);
+                        if (xSemaphoreTake(xOffsetMutex, portMAX_DELAY) == pdTRUE)
+                        {
+                            g_offset_temperature = offset;
+                            xSemaphoreGive(xOffsetMutex);
+                        }
+                    }
+                    tcp_write(tpcb, "HTTP/1.1 200 OK\r\n\r\n", 19, TCP_WRITE_FLAG_COPY);
+                }
+                else
+                    tcp_write(tpcb, "HTTP/1.1 400 Bad Request\r\n\r\n", 28, TCP_WRITE_FLAG_COPY);
             }
-            else
+            else if (strcmp(sensor, "humidity") == 0)
             {
-                tcp_write(tpcb, "HTTP/1.1 400 Bad Request\r\n\r\n", 28, TCP_WRITE_FLAG_COPY);
+                if (min >= MIN_HUM_LEVEL && max <= MAX_HUM_LEVEL && min < max)
+                {
+                    if (xSemaphoreTake(xLevelsLimitsMutex, portMAX_DELAY) == pdTRUE)
+                    {
+                        g_humidity_min_limit = min;
+                        g_humidity_max_limit = max;
+                        xSemaphoreGive(xLevelsLimitsMutex);
+                        if (xSemaphoreTake(xOffsetMutex, portMAX_DELAY) == pdTRUE)
+                        {
+                            g_offset_humidity = offset;
+                            xSemaphoreGive(xOffsetMutex);
+                        }
+                    }
+                    tcp_write(tpcb, "HTTP/1.1 200 OK\r\n\r\n", 19, TCP_WRITE_FLAG_COPY);
+                }
+                else
+                    tcp_write(tpcb, "HTTP/1.1 400 Bad Request\r\n\r\n", 28, TCP_WRITE_FLAG_COPY);
+            }
+            else if (strcmp(sensor, "pressure") == 0)
+            {
+                if (min >= MIN_PRESS_LEVEL && max <= MAX_PRESS_LEVEL && min < max)
+                {
+                    if (xSemaphoreTake(xLevelsLimitsMutex, portMAX_DELAY) == pdTRUE)
+                    {
+                        g_pressure_min_limit = min;
+                        g_pressure_max_limit = max;
+                        xSemaphoreGive(xLevelsLimitsMutex);
+                        if (xSemaphoreTake(xOffsetMutex, portMAX_DELAY) == pdTRUE)
+                        {
+                            g_offset_pressure = offset;
+                            xSemaphoreGive(xOffsetMutex);
+                        }
+                    }
+                    tcp_write(tpcb, "HTTP/1.1 200 OK\r\n\r\n", 19, TCP_WRITE_FLAG_COPY);
+                }
+                else
+                    tcp_write(tpcb, "HTTP/1.1 400 Bad Request\r\n\r\n", 28, TCP_WRITE_FLAG_COPY);
             }
 
             tcp_output(tpcb);
@@ -235,80 +306,6 @@ void user_request(char **request_ptr, struct tcp_pcb *tpcb)
 
 static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
-    int32_t humidity;
-    int32_t humidity_min_limit;
-    int32_t humidity_max_limit;
-
-    int32_t temperature;
-    int32_t temperature_min_limit;
-    int32_t temperature_max_limit;
-
-    int32_t pressure;
-    int32_t pressure_min_limit;
-    int32_t pressure_max_limit;
-
-    uint32_t humidity_historic_levels[MAX_READINGS];
-    uint32_t temperature_historic_levels[MAX_READINGS];
-    uint32_t pressure_historic_levels[MAX_READINGS];
-
-    if (xSemaphoreTake(xReadingsMutex, portMAX_DELAY) == pdTRUE)
-    {
-        humidity = g_humidity;
-        temperature = g_temperature;
-        pressure = g_pressure;
-
-        memcpy(humidity_historic_levels, g_humidity_historic_levels, sizeof(uint) * MAX_READINGS);
-        memcpy(temperature_historic_levels, g_temperature_historic_levels, sizeof(uint) * MAX_READINGS);
-        memcpy(pressure_historic_levels, g_pressure_historic_levels, sizeof(uint) * MAX_READINGS);
-        xSemaphoreGive(xReadingsMutex);
-    }
-
-    if (xSemaphoreTake(xLevelsLimitsMutex, portMAX_DELAY) == pdTRUE)
-    {
-        pressure_min_limit = g_pressure_min_limit;
-        pressure_max_limit = g_pressure_max_limit;
-
-        humidity_min_limit = g_humidity_min_limit;
-        humidity_max_limit = g_humidity_max_limit;
-
-        temperature_min_limit = g_temperature_min_limit;
-        temperature_max_limit = g_temperature_max_limit;
-
-        xSemaphoreGive(xLevelsLimitsMutex);
-    }
-
-    char json_h_temp[1024];
-    char *ptr_h_temp = json_h_temp;
-
-    char json_h_hum[1024];
-    char *ptr_h_hum = json_h_hum;
-
-    char json_h_press[1024];
-    char *ptr_h_press = json_h_press;
-
-    *ptr_h_temp++ = '[';
-    for (int i = 0; i < MAX_READINGS; i++)
-    {
-        ptr_h_temp += sprintf(ptr_h_temp, "%u%s", temperature_historic_levels[i], (i < MAX_READINGS - 1) ? "," : "");
-    }
-    *ptr_h_temp++ = ']';
-    *ptr_h_temp = '\0';
-
-    *ptr_h_hum++ = '[';
-    for (int i = 0; i < MAX_READINGS; i++)
-    {
-        ptr_h_hum += sprintf(ptr_h_hum, "%u%s", humidity_historic_levels[i], (i < MAX_READINGS - 1) ? "," : "");
-    }
-    *ptr_h_hum++ = ']';
-    *ptr_h_hum = '\0';
-
-    *ptr_h_press++ = '[';
-    for (int i = 0; i < MAX_READINGS; i++)
-    {
-        ptr_h_press += sprintf(ptr_h_press, "%u%s", pressure_historic_levels[i], (i < MAX_READINGS - 1) ? "," : "");
-    }
-    *ptr_h_press++ = ']';
-    *ptr_h_press = '\0';
     if (!p)
     {
         tcp_close(tpcb);
@@ -473,24 +470,24 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "</style>\n"
              "</head>\n"
              "<body>\n"
-             "<h1>Weather Station Dashboard</h1>\n"
+             "<h1>Estação Meteorológica</h1>\n"
              "\n"
              "<div id=\"data-section\">\n"
              "  <div class=\"card-container\">\n"
              "    <div class=\"card\">\n"
              "      <h2>Temperatura <span class=\"sensor-name\">(AHT10)</span></h2>\n"
              "      <div class=\"value\" id=\"valueTemp\">0°C</div>\n"
-             "      <div class=\"minmax\" id=\"minmaxTemp\">Min: 18°C | Max: 28°C</div>\n"
+             "      <div class=\"minmax\" id=\"minmaxTemp\">Min: 0°C | Max: 0°C</div>\n"
              "    </div>\n"
              "    <div class=\"card\">\n"
              "      <h2>Umidade <span class=\"sensor-name\">(AHT10)</span></h2>\n"
              "      <div class=\"value\" id=\"valueHumi\">0%%</div>\n"
-             "      <div class=\"minmax\" id=\"minmaxHumi\">Min: 40%% | Max: 70%%</div>\n"
+             "      <div class=\"minmax\" id=\"minmaxHumi\">Min: 0%% | Max: 0%%</div>\n"
              "    </div>\n"
              "    <div class=\"card\">\n"
              "      <h2>Pressão <span class=\"sensor-name\">(BMP280)</span></h2>\n"
-             "      <div class=\"value\" id=\"valuePres\">0kPa</div>\n"
-             "      <div class=\"minmax\" id=\"minmaxPres\">Min: 98 kPa | Max: 105 kPa</div>\n"
+             "      <div class=\"value\" id=\"valuePres\">0hPa</div>\n"
+             "      <div class=\"minmax\" id=\"minmaxPres\">Min: 0hPa | Max: 0hPa</div>\n"
              "    </div>\n"
              "  </div>\n"
              "\n"
@@ -511,7 +508,7 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "</div>\n"
              "\n"
              "<div id=\"config-section\" class=\"hidden\">\n"
-             "  <form id=\"configForm\" method=\"GET\" action=\"/config\">\n"
+             "  <form id=\"configForm\" method=\"POST\" action=\"/config\">\n"
              "    <h2>Configurar Limiares e Offset</h2>\n"
              "    <label for=\"sensorSelect\">Selecione a grandeza:</label>\n"
              "    <select id=\"sensorSelect\" name=\"sensor\">\n"
@@ -520,11 +517,11 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "      <option value=\"pressure\">Pressão</option>\n"
              "    </select>\n"
              "    <label for=\"minInput\">Valor Mínimo:</label>\n"
-             "    <input type=\"number\" id=\"minInput\" name=\"min_value\" step=\"0.1\" value=\"0\" required>\n"
+             "    <input type=\"number\" id=\"minInput\" name=\"min_value\" step=\"1\" value=\"0\" required>\n"
              "    <label for=\"maxInput\">Valor Máximo:</label>\n"
-             "    <input type=\"number\" id=\"maxInput\" name=\"max_value\" step=\"0.1\" value=\"100\" required>\n"
+             "    <input type=\"number\" id=\"maxInput\" name=\"max_value\" step=\"1\" value=\"0\" required>\n"
              "    <label for=\"offsetInput\">Offset de Calibração:</label>\n"
-             "    <input type=\"number\" id=\"offsetInput\" name=\"offset_value\" step=\"0.01\" value=\"0\" required>\n"
+             "    <input type=\"number\" id=\"offsetInput\" name=\"offset_value\" step=\"1\" value=\"0\" required>\n"
              "    <button type=\"submit\">Salvar Configuração</button>\n"
              "  </form>\n"
              "</div>\n"
@@ -548,7 +545,7 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "  }\n"
              "});\n"
              "\n"
-             "function createChart(id, label, color) {\n"
+             "function createChart(id, label, color, min, max) {\n"
              "  return new Chart(document.getElementById(id), {\n"
              "    type: 'line',\n"
              "    data: {\n"
@@ -558,7 +555,7 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "        data: [],\n"
              "        borderColor: color,\n"
              "        backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.2)'),\n"
-             "        fill: true,\n"
+             "        fill: 'start',\n"
              "        tension: 0.4\n"
              "      }]\n"
              "    },\n"
@@ -568,7 +565,7 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "        legend: { position: 'top' }\n"
              "      },\n"
              "      scales: {\n"
-             "        y: { beginAtZero: false }\n"
+             "        y: { min: min, max: max}\n"
              "      }\n"
              "    }\n"
              "  });\n"
@@ -583,11 +580,11 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "    .then(res => res.json())\n"
              "    .then(data => {\n"
              "      document.getElementById('valueTemp').innerText = data.temp_atual + '°C';\n"
-             "      document.getElementById('minmaxTemp').innerText = 'Min: ' + data.min_config_temp + '°C | Max: ' + data.max_config_temp + '°C';\n"
+             "      document.getElementById('minmaxTemp').innerText = 'Min: ' + data.min_config_temp + '°C | Max: ' + data.max_config_temp + '°C | Offset: ' + data.temp_offset + '°C';\n"
              "      document.getElementById('valueHumi').innerText = data.hum_atual + '%%';\n"
-             "      document.getElementById('minmaxHumi').innerText = 'Min: ' + data.min_config_hum + '%% | Max: ' + data.max_config_hum + '%%';\n"
-             "      document.getElementById('valuePres').innerText = data.press_atual + 'kPa';\n"
-             "      document.getElementById('minmaxPres').innerText = 'Min: ' + data.min_config_press + ' kPa | Max: ' + data.max_config_press + ' kPa';\n"
+             "      document.getElementById('minmaxHumi').innerText = 'Min: ' + data.min_config_hum + '%% | Max: ' + data.max_config_hum + '%% | Offset: ' + data.humi_offset + '%%';\n"
+             "      document.getElementById('valuePres').innerText = data.press_atual + 'hPa';\n"
+             "      document.getElementById('minmaxPres').innerText = 'Min: ' + data.min_config_press + ' hPa | Max: ' + data.max_config_press + ' hPa | Offset: ' + data.pres_offset + ' hPa';\n"
              "\n"
              "      if (graficoTemp && Array.isArray(data.historico_temp)) {\n"
              "        graficoTemp.data.labels = data.historico_temp.map((_, i) => i + 1);\n"
@@ -608,15 +605,20 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "    .catch(error => console.error('Erro:', error));\n"
              "}\n"
              "\n"
-             "graficoTemp = createChart('tempChart', 'Temperatura (°C)', 'rgb(229, 57, 53)');\n"
-             "graficoHumi = createChart('humChart', 'Umidade (%%)', 'rgb(251, 140, 0)');\n"
-             "graficoPres = createChart('presChart', 'Pressão (kPa)', 'rgb(25, 118, 210)');\n"
+             "graficoTemp = createChart('tempChart', 'Temperatura (°C)', 'rgb(229, 57, 53)', %d, %d);\n"
+             "graficoHumi = createChart('humChart', 'Umidade (%%)', 'rgb(251, 140, 0)', %d, %d);\n"
+             "graficoPres = createChart('presChart', 'Pressão (hPa)', 'rgb(25, 118, 210)', %d, %d);\n"
              "\n"
              "atualizarDados();\n"
              "setInterval(atualizarDados, 3000);\n"
              "</script>\n"
              "</body>\n"
-             "</html>");
+             "</html>",
+            MIN_TEMP_LEVEL, MAX_TEMP_LEVEL,
+            MIN_HUM_LEVEL, MAX_HUM_LEVEL,
+            MIN_PRESS_LEVEL, MAX_PRESS_LEVEL);
+
+            printf("MIN_TEMP_LEVEL: %d, MAX_TEMP_LEVEL: %d\n", MIN_TEMP_LEVEL, MAX_TEMP_LEVEL);
 
     // Escreve dados para envio (mas não os envia imediatamente).
     tcp_write(tpcb, html, strlen(html), TCP_WRITE_FLAG_COPY);

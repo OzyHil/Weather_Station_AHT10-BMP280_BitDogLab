@@ -17,6 +17,10 @@ int32_t g_temperature = 0;
 int32_t g_pressure = 0;
 int32_t g_humidity = 0;
 
+int32_t g_offset_humidity = 0;
+int32_t g_offset_temperature = 0;
+int32_t g_offset_pressure = 0;
+
 int32_t g_temperature_max_limit = MAX_TEMP_LEVEL;
 int32_t g_temperature_min_limit = MIN_TEMP_LEVEL;
 
@@ -25,7 +29,6 @@ int32_t g_pressure_min_limit = MIN_PRESS_LEVEL;
 
 int32_t g_humidity_max_limit = MAX_HUM_LEVEL;
 int32_t g_humidity_min_limit = MIN_HUM_LEVEL;
-
 
 int32_t g_temperature_historic_levels[MAX_READINGS] = {0};
 int32_t g_pressure_historic_levels[MAX_READINGS] = {0};
@@ -45,7 +48,8 @@ SemaphoreHandle_t xDisplayMode,
     xResetThresholds,
     xReadingsMutex,
     xLevelsLimitsMutex,
-    xStateMutex;
+    xStateMutex,
+    xOffsetMutex;
 
 // Variáveis para controle de tempo de debounce dos botões
 uint last_time_button_A, last_time_button_B, last_time_button_J = 0;
@@ -88,6 +92,10 @@ void vTaskResetThresholds()
         {
             if (xSemaphoreTake(xLevelsLimitsMutex, portMAX_DELAY) == pdTRUE) // Espera pelo sinal do botão J
             {
+                g_offset_humidity = 0;
+                g_offset_temperature = 0;
+                g_offset_pressure = 0;
+
                 g_temperature_max_limit = MAX_TEMP_LEVEL;
                 g_temperature_min_limit = MIN_TEMP_LEVEL;
 
@@ -174,19 +182,31 @@ void vTaskControlSystem()
     {
         // Leitura do BMP280
         bmp280_read_raw(I2C_PORT_0, &raw_temp_bmp, &raw_pressure);
-        new_pressure = bmp280_convert_pressure(raw_pressure, raw_temp_bmp, &params) / 1000.0;
+        new_pressure = bmp280_convert_pressure(raw_pressure, raw_temp_bmp, &params) / 100.0; // Converte a pressão lida do BMP280
+
+        if (xSemaphoreTake(xOffsetMutex, portMAX_DELAY) == pdTRUE)
+        {
+            new_pressure += g_offset_pressure;
+            xSemaphoreGive(xOffsetMutex);
+        }
 
         if (aht20_read(I2C_PORT_1, &data))
         {
-            new_humidity = data.humidity;
-            new_temperature = data.temperature;
+            if (xSemaphoreTake(xOffsetMutex, portMAX_DELAY) == pdTRUE)
+            {
+                new_humidity = data.humidity + g_offset_humidity;
+                new_temperature = data.temperature + g_offset_temperature;
+                xSemaphoreGive(xOffsetMutex);
+            }
         }
 
         if (xSemaphoreTake(xReadingsMutex, portMAX_DELAY) == pdTRUE)
         {
-            g_temperature = new_temperature; // Atualiza a temperatura global
-            g_pressure = new_pressure;       // Atualiza a pressão global
-            g_humidity = new_humidity;       // Atualiza a umidade global
+            g_temperature = new_temperature < MIN_TEMP_LEVEL ? MIN_TEMP_LEVEL : new_temperature > MAX_TEMP_LEVEL ? MAX_TEMP_LEVEL: new_temperature;
+
+            g_pressure = new_pressure < MIN_PRESS_LEVEL ? MIN_PRESS_LEVEL : new_pressure > MAX_PRESS_LEVEL ? MAX_PRESS_LEVEL: new_pressure;
+
+            g_humidity = new_humidity < MIN_HUM_LEVEL ? MIN_HUM_LEVEL : new_humidity > MAX_HUM_LEVEL ? MAX_HUM_LEVEL : new_humidity;
 
             add_reading(g_temperature, g_temperature_historic_levels);
             add_reading(g_pressure, g_pressure_historic_levels);
@@ -271,6 +291,7 @@ int main()
     xReadingsMutex = xSemaphoreCreateMutex();
     xLevelsLimitsMutex = xSemaphoreCreateMutex();
     xStateMutex = xSemaphoreCreateMutex();
+    xOffsetMutex = xSemaphoreCreateMutex();     // Mutex para controle de offsets
     set_led_color(GREEN);                       // Liga o LED verde
     printf("Iniciando...");                     // Exibe a mensagem inicial no display
     init_cyw43();                               // Inicializa a arquitetura CYW43
