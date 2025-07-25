@@ -318,7 +318,7 @@ int main()
     xTaskCreate(vTaskLedMatrix, "Task LED Matrix", configMINIMAL_STACK_SIZE + 128, NULL, 1, NULL);
     xTaskCreate(vTaskControlSystem, "Task Control System", configMINIMAL_STACK_SIZE + 128, NULL, 1, NULL);
     xTaskCreate(vTaskResetThresholds, "Task Reset Thresholds", configMINIMAL_STACK_SIZE + 128, NULL, 1, NULL);
-    // xTaskCreate(vTaskBuzzer, "Task Buzzer", configMINIMAL_STACK_SIZE + 128, NULL, 1, NULL);
+    xTaskCreate(vTaskBuzzer, "Task Buzzer", configMINIMAL_STACK_SIZE + 128, NULL, 1, NULL);
     xTaskCreate(vTaskTCPServer, "Task TCP Server", configMINIMAL_STACK_SIZE + 128, NULL, 1, NULL);
 
     vTaskStartScheduler(); // Inicia o escalonador de tarefas
